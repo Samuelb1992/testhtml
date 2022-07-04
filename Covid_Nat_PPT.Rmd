@@ -1,0 +1,559 @@
+---
+title: "Impacto del Covid-19 en la natalidad en Chile"
+author: "Samuel Beltrán Lastra"
+date: "18/02/2022"
+output: 
+  ioslides_presentation:
+    css : styles.css
+csl: vancouver.csl
+bibliography: datos_medicos.bib
+
+  
+  
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(tidyverse)
+library(clickR)
+library(ggplot2)
+library(dplyr)
+library(plyr)
+library(forecast)
+library(RColorBrewer)
+library(knitr)
+library(vars)
+library(lmtest)
+library(prophet)
+library(kableExtra)
+library(rmeta)
+```
+
+## Tabla de Contenido {#font-color}
+
+1. Objetivos
+2. Datos
+3. Metodología    
+4. Resultados
+5. Discusión
+
+
+## Objetivos {#font-color}
+
+* Analizar la relación entre la Natalidad y el Covid-19 en Chile.
+* Medir el impacto del Covid-19 en la Natalidad  a nivel país.
+* Medir el impacto del Covid-19 en la Natalidad  a nivel de regiones.
+
+
+## Datos {#font-color}
+
+```{r echo=FALSE}
+#Nacimientos por dia
+birth_cl = read.csv("https://raw.githubusercontent.com/MinCiencia/Datos-COVID19/master/output/producto31/Nacimientos_std.csv")
+#Pasamos Fecha a formato de fecha
+birth_cl$Fecha = as.Date(birth_cl$Fecha)
+# Seleccionamos datos desde el 2016 al 2021
+birth_cl = subset(birth_cl,Fecha >= "2016-01-01" & Fecha <= "2021-12-31")
+# agregamos columna de año y mes
+birth_cl$Ano = as.numeric(format(birth_cl$Fecha,"%Y"))
+birth_cl$Mes = as.numeric(format(birth_cl$Fecha,"%m"))
+# añade columna año - mes
+#birth_cl$ano_mes = format(birth_cl$Fecha,'%Y-%m')
+# sum nacimientos por region y mes-año
+ym_birth = aggregate(Nacimientos ~ Ano + Mes + Codigo.region , data= birth_cl, FUN= sum)
+```
+
+
+*  **Nacimientos** : Se obtienen los datos de los nacimientos diarios por región y comuna desde el año 2010. [@servicioderegistrocivildechileDatosCOVID19OutputProducto31]
+
+```{r Datos_Nacimientos} 
+knitr::kable(head(birth_cl,3), format = "html") %>%
+  kable_paper("hover",font_size = 12 , full_width = F)
+```
+
+*Para el análisis se agregarán los nacimientos por mes y región*
+
+## Datos {#font-color}
+
+*  **Población Estimada** : Se obtienen los datos de la población estimada y proyectada de cada año (al 30 de Junio) desde el año 2002 al 2035. Se encuentra a nivel de región, edad y sexo.  [@institutonacionalestadisticachileProyeccionesPoblacion]
+
+```{r echo=FALSE}
+#Lectura de csv descargado del INE - Censo 2017
+pop_cl = read.csv("/Users/samuelbeltranlastra/Documents/Proyecto R Git/R_Scripts/Datos Médicos/ine_estimaciones-y-proyecciones-2002-2035_base-2017_region_base.csv")
+# formato wide a long
+pop_clw=reshape(pop_cl,varying = 4:ncol(pop_cl),direction = "long",sep ="",drop = c("Sexo","Edad"))
+# Drop variables/ row names  y cambiamos nombres
+rownames(pop_clw) = NULL
+colnames(pop_clw)[2:3] = c("ano","Poblacion")
+# Agrupando por region y año
+pop_group = aggregate(Poblacion ~ Region + ano, data = pop_clw, FUN = sum)
+```
+
+```{r}
+knitr::kable(head(pop_cl[,1:8],3), format = "html") %>%
+  kable_paper("hover",font_size = 12 , full_width = F)
+```
+
+*Para el análisis se agregarán los datos por año y región*
+
+## Metodología {#font-color}
+### Indicadores
+
+El indicador principal de los análisis será la  **tasa mensual de natalidad por 1000 habitantes** que se define como:
+
+$$  \text{Tasa de Natalidad}_{ij} = \frac{\text{Nacimientos}_i}{\text{Población}_j}\cdot 1000 \cdot 12 \ $$
+Donde:
+$$ \text{i = Ene,Feb,...,Dic (mes) } \text{ y j = 2016, 2017 ,..., 2021 (año)} $$
+
+
+## Metodología {#font-color}
+
+### Comparación de Medias
+
+Para analizar si existe un impacto del Covid-19 en la Natalidad se comparará la natalidad en dos periodos, antes de la pandemia y después de esta. Se utilizará un test t donde los datos proceden de poblaciones independientes.
+
+$$ H_0 : \mu_\text{pre-pandemia} = \mu_\text{post-pandemia}\\ H_1:\mu_\text{pre-pandemia} \neq \mu_\text{post-pandemia} $$
+
+
+## Metodología {#font-color}
+
+### Series Temporales
+
+Se utilizarán dos enfoques:
+
+* Ajustar un modelo de regresión con errores ARIMA. Se aprovecha autocorrelación y se puede medir si el impacto de la pandemia es significativo.
+
+$$y_t = \beta_0+\beta_{1}x_t+\eta_t\\\text{donde: }\eta_t\sim ARIMA(p,1,q) $$
+En este caso d=1 , ya que existe una tendencia (decreciente).
+
+
+
+
+## Metodología {#font-color}
+
+### Series Temporales
+
+* Se ajustarán modelos ARIMA usando los datos de la serie desde el año 2016 a Noviembre del 2020. Para posteriormente predecir que hubiera sido lo más probable que ocurriera sin pandemia. Esto se visualizará gráficamente.
+
+
+
+```{r Union_dataset, echo=FALSE}
+# Union nacimientos y poblacion estimada
+df1 = merge(x= ym_birth, y = pop_group , by.x = c("Ano","Codigo.region") , by.y = c("ano","Region") , all.x = TRUE )
+# Agregamos campo fecha as Date para graficos posteriomente
+df1$Date =as.Date(paste(df1$Ano,"-",df1$Mes,"-01",sep=""))
+# Agrupado por país
+df1_chile = aggregate(cbind(Nacimientos,Poblacion) ~ Ano + Mes + Date,data=df1,FUN=sum)
+df1_chile$Tasa_Natalidad = (df1_chile$Nacimientos/df1_chile$Poblacion)*1000*12
+# Calculamos tasa de natalidad
+df1$Tasa_Natalidad = (df1$Nacimientos/df1$Poblacion)*1000*12
+#Ordenamos el dataset
+df1 = plyr::arrange(df1,Ano,Mes)
+```
+
+
+
+```{r Gráficos,include=FALSE}
+# Colores para el gráfico
+colores = brewer.pal(12,"Set3")
+#Obtener nombres de las regiones
+unique_region =!duplicated(birth_cl[c("Region","Codigo.region")])
+names_region = birth_cl[unique_region,c("Region","Codigo.region")]
+
+# Plot Chile
+ts_prueba= ts(subset(df1_chile,select = Tasa_Natalidad ), start = c(2016,1), frequency = 12)
+#Descomposicion de la serie para obtencion de la tendencia
+descomp_ts = stl(ts_prueba[,1], s.window = "periodic")
+#plot
+plot(ts_prueba , ylab="", xlab="", col = colores[1])
+#titulo
+title(main = paste("Tasa de Natalidad en Chile"), xlab="Fecha" ,ylab= "Tasa Natalidad" , col.main = "black" , cex.main=0.95 ,cex.lab=0.8)
+lines(ts(descomp_ts$time.series[1:60,2],start=c(2016,1), frequency = 12),col= colores[3]) # TREND
+abline(v = 2020.25,col = colores[6], lty=2) # SARS COVID
+abline(v = 2020.9,col = colores[4], lty=3) # Periodo a estudiar impacto Dic-20
+# textos
+text(2020,
+    max(ts_prueba)*0.99,
+    labels= "SARS-CoV-2", cex=.8,
+    col=colores[6])
+text(2021.5,
+    max(ts_prueba)*0.99,
+    labels= "Efecto posterior", cex=.8,
+    col=colores[4])
+# leyenda
+legend(2016, min(ts_prueba)*1.10, legend=c("Tendencia"),
+       col=c(colores[3]), lty=1, cex=0.8)
+
+# Funcion de los gráficos de natalidad
+plot_natalidad =function(x,y) {
+#Generar la serie temporal de esa region
+ts_prueba= ts(subset(df1,Codigo.region == x,select = Tasa_Natalidad), start = c(2016,1), frequency = 12)
+#Descomposicion de la serie para obtencion de la tendencia
+descomp_ts = stl(ts_prueba[,1], s.window = "periodic")
+#plot
+plot(ts_prueba , ylab="", xlab="", col = colores[1])
+#titulo
+title(main = paste("Tasa de Natalidad en la región de",y), xlab="Fecha" ,ylab= "Tasa Natalidad" , col.main = "black" , cex.main=0.95 ,cex.lab=0.8)
+lines(ts(descomp_ts$time.series[1:60,2],start=c(2016,1), frequency = 12),col= colores[3]) # TREND
+abline(v = 2020.25,col = colores[6], lty=2) # SARS COVID
+abline(v = 2020.9,col = colores[4], lty=3) # Periodo a estudiar impacto Dic-20
+# textos
+text(2020,
+    max(ts_prueba)*0.99,
+    labels= "SARS-CoV-2", cex=.8,
+    col=colores[6])
+text(2021.5,
+    max(ts_prueba)*0.99,
+    labels= "Efecto posterior", cex=.8,
+    col=colores[4])
+# leyenda
+legend(2016, min(ts_prueba)*1.10, legend=c("Tendencia"),
+       col=c(colores[3]), lty=1, cex=0.8)
+}
+# mapply para generar graficos
+todos_plots =mapply(plot_natalidad,names_region$Codigo.region,names_region$Region)
+
+```
+
+
+## Resultados {#Comp_medias}
+
+```{r Comparacion_medias1, include=FALSE}
+#Seleccionamos los datos y los dividimos en dos dataframes
+df1_precovid = subset(df1 ,Date>="2019-12-01" & Date<"2020-12-01")
+df1_postcovid = subset(df1 ,Date>="2020-12-01" & Date<"2021-12-01")
+#Datos de Chile agrupados
+df1_pre_chile = subset(df1_chile ,Date>="2019-12-01" & Date<"2020-12-01")
+df1_post_chile = subset(df1_chile ,Date>="2020-12-01" & Date<"2021-12-01")
+```
+
+```{r Comparacion_medias2 }
+# Jntamos en un dataframe
+df2_merge = merge(x=df1_precovid,y=df1_postcovid,by=c("Codigo.region","Mes"), all.x = TRUE)
+# chile
+df2_merge_chile = merge(x=df1_pre_chile,y=df1_post_chile,by=c("Mes"), all.x = TRUE)
+#Filtramos
+df3 = subset(df2_merge,select = c(Codigo.region,Mes,Tasa_Natalidad.x,Tasa_Natalidad.y))
+#filtro chile
+df3_chile = subset(df2_merge_chile,select = c(Mes,Tasa_Natalidad.x,Tasa_Natalidad.y))
+#ordenando dataset
+df3=plyr::arrange(df3,Codigo.region,Mes)
+#colnames
+colnames(df3)[3:4] = c("Pre","Post")
+#colnames Chile
+colnames(df3_chile)[2:3] = c("Pre","Post")
+
+# t test Chile
+t_test_chile = t.test(df3_chile$Pre,df3_chile$Post)
+
+# funcion t t test
+
+t_test_f = function(df,region) {
+  df1= subset(df,Codigo.region==region)
+  t.test(x=df1$Pre,y=df1$Post)
+}
+
+
+# Aplicamos por region
+
+Codigo.region = c()
+Media_Pre = c()
+Media_Post = c()
+p_value = c()
+conf_int_1 = c()
+conf_int_2 = c()
+
+# Info Chile
+
+Codigo.region[17]=17
+Media_Pre[17]=round(t_test_chile$estimate[1],2)
+Media_Post[17]=round(t_test_chile$estimate[2],2)
+p_value[17]=ifelse(round(t_test_chile$p.value,3)<0.05,paste0(round(t_test_chile$p.value,3),"***"),round(t_test_chile$p.value,3))
+conf_int_1[17]= round(t_test_chile$conf.int,2)[1]
+conf_int_2[17]= round(t_test_chile$conf.int,2)[2]
+
+
+# Funcion para cada region
+for(i in unique(df3$Codigo.region)) {
+  test = t_test_f(df3,i)
+  Codigo.region[i]=i
+  Media_Pre[i]=round(test$estimate[1],2)
+  Media_Post[i]=round(test$estimate[2],2)
+  p_value[i]=ifelse(round(test$p.value,3)<0.05,paste0(round(test$p.value,3),"***"),round(test$p.value,3))
+  conf_int_1[i]= round(test$conf.int,2)[1]
+  conf_int_2[i]= round(test$conf.int,2)[2]
+}
+
+resultados = data.frame("Codigo.region"=Codigo.region,"Media_pre"=Media_Pre,"Media_post"=Media_Post,"p_value"=p_value ,"int_conf"= paste("[",conf_int_1,",",conf_int_2,"]"))
+#agregar nombre Chile
+names_region = rbind(names_region,c("Total",17))
+#cruzar datos
+resultados = merge(x=resultados,y=names_region,by="Codigo.region",all.x = TRUE)
+#select columnas
+resultados = subset(resultados,select=c(Region,Media_pre,Media_post,p_value,int_conf))
+knitr::kable(resultados , col.names = c("$\\text{Región}$","$\\mu_\\text{pre}$","$\\mu_\\text{post}$","$pvalue$","$IC$"),caption = "Tabla : Comparación de medias de tasa de natalidad pre y post pandemia") %>%
+  kable_paper("hover",font_size = 12 , full_width = F) %>%
+    footnote(general ="t-test bilateral usando un p-value de 0.05 (***).Periodo pre-pandemia ( Dic-19 a Nov-20) y periodo post-pandemia ( Dic-20 a Nov-21).")
+
+# Calculamos tasa media de natalidad y sd para esos periodos
+#precovid
+df2_precovid = aggregate(Tasa_Natalidad ~ Codigo.region ,data=df1_precovid, FUN = function(x) c(mean = mean(x), sd = sd(x)))
+#postcovid
+df2_postcovid = aggregate(Tasa_Natalidad ~ Codigo.region ,data=df1_postcovid, FUN = function(x) c(mean = mean(x), sd = sd(x)))
+```
+
+
+## Resultados {#plot_chile}
+### Serie Temporal - Chile
+
+```{r plot_general}
+# Plot Chile
+ts_prueba= ts(subset(df1_chile,select = Tasa_Natalidad ), start = c(2016,1), frequency = 12)
+#Descomposicion de la serie para obtencion de la tendencia
+descomp_ts = stl(ts_prueba[,1], s.window = "periodic")
+#plot
+plot(ts_prueba , ylab="", xlab="", col = colores[1])
+#titulo
+title(main = paste("Tasa de Natalidad en Chile "), xlab="Fecha" ,ylab= "Tasa Natalidad" , col.main = "black" , cex.main=0.95 ,cex.lab=0.8)
+lines(ts(descomp_ts$time.series[1:60,2],start=c(2016,1), frequency = 12),col= colores[3]) # TREND
+abline(v = 2020.25,col = colores[6], lty=2) # SARS COVID
+abline(v = 2020.9,col = colores[4], lty=3) # Periodo a estudiar impacto Dic-20
+# textos
+text(2020,
+    max(ts_prueba)*0.99,
+    labels= "SARS-CoV-2", cex=.8,
+    col=colores[6])
+text(2021.5,
+    max(ts_prueba)*0.99,
+    labels= "Efecto posterior", cex=.8,
+    col=colores[4])
+# leyenda
+legend(2016, min(ts_prueba)*1.10, legend=c("Tendencia"),
+       col=c(colores[3]), lty=1, cex=0.8)
+```
+
+Descomposición de la serie (tendencia) se realizó con el método STL (Seasonal and Trend decomposition using Loess).
+
+
+## Resultados {#Comp_medias}
+### Total País
+
+```{r Regresion_Arima_Chile}
+#create dummy pandemia
+df1_chile["Pandemia"] = ifelse(df1_chile$Date>'2020-11-01',1,0)
+# auto_arima
+auto_regresion_arima = auto.arima(df1_chile[,"Tasa_Natalidad"], xreg = df1_chile[,"Pandemia"])
+#auto arima sin regresor
+auto_regresion_arima_sinreg = auto.arima(df1_chile[,"Tasa_Natalidad"])
+# Modelo ajustado y significancia de los coeficientes.
+#plot
+autoplot(ts(auto_regresion_arima$x,start = c(2016,1) ,frequency = 12) , main = "Regresion con Errores ARIMA vs ARIMA" )+
+autolayer(ts(auto_regresion_arima$fitted, start = c(2016,1), frequency=12 ), series= "Reg. ARIMA") +
+xlab("Año-Mes") +
+ylab("Tasa Natalidad")+
+labs(colour = "")+
+geom_vline(xintercept = 2020.833 , lty=2 , colour= colores[5])+
+autolayer(ts(auto_regresion_arima_sinreg$fitted, start = c(2016,1), frequency=12 ), series= "ARIMA") 
+
+```
+
+## Resultados {#Comp_medias}
+### Total País
+
+```{r}
+#significancia parametros
+significancia_df = data.frame(round(coeftest(auto_regresion_arima)[,c(1,4)],3))
+significancia_df["Pr...z.."] = ifelse(significancia_df$Pr...z.. < 0.05,paste0(significancia_df$Pr...z..,"***"),significancia_df$Pr...z..)
+significancia_df["IC"] = paste0("[",round(confint(auto_regresion_arima)[,1],2),",",round(confint(auto_regresion_arima)[,2],2),"]")
+rownames(significancia_df) = c("$\\theta_1$","$\\theta_2$","$c$","$\\beta_1$")
+knitr::kable(significancia_df , col.names = c("$\\text{Estimado}$","$pvalue$","$\\text{IC}$") , caption = "Tabla: Significancia parámetros Regresión ARIMA" , row.names = T) %>%
+  kable_paper("hover",font_size = 16 , full_width = F) %>%
+    footnote(general ="$\\beta_1$ en este caso es la variable dummy que indica el efecto de la pandemia con un retraso de 9 meses desde el comienzo de esta (0 = sin pandemia , 1 = con pandemia).Significancia de los parámetros con test de Wald usando un p-value = 0.05***.")
+
+
+```
+
+el modelo ajustado para el total país es:
+
+$$y_t=\ \beta_0+\beta_1X_t+\eta_t\\\\\eta_t\ =\ \eta_{t-1}+c\ +{\varepsilon\ }_t\ -\theta_1{\varepsilon\ }_{t-1}\ -\theta_2{\varepsilon\ }_{t-2}\\{\varepsilon\ }_t\sim  N(0;\sigma^2) $$ 
+
+
+
+
+## Resultados {#Comp_medias}
+### Por región:
+
+
+
+```{r Regresion_Arima_Region_Foresplot}
+#agregamos dummy a las regiones
+df1["Pandemia"] = ifelse(df1$Date>'2020-11-01',1,0)
+# funcion por region
+arima_region = function(x){
+  pandemia_r = as.matrix(subset(df1,Codigo.region == x ,select = Pandemia))
+  arima_temp = auto.arima(ts(subset(df1,Codigo.region == x ,select = Tasa_Natalidad)) , xreg = pandemia_r , stepwise = FALSE)
+}
+#lapply a todas las regiones
+fit.region = lapply(unique(df1$Codigo.region),arima_region)
+
+#iterar por los distintos elementos
+
+Cod_region = c()
+par_region = c()
+p_value_region = c()
+sig_region = c()
+lower_region =c()
+upper_region =c()
+
+#cambiar tipo dato codigo_region
+names_region$Codigo.region = as.numeric(names_region$Codigo.region)
+
+for (i in names_region$Codigo.region[Codigo.region!=17]) {
+  Cod_region[i] = i
+  par_region[i] = fit.region[[i]]$coef["Pandemia"]
+  p_value_region[i] = round(coeftest(fit.region[[i]])["Pandemia",4],3) 
+  sig_region[i] = ifelse(coeftest(fit.region[[i]])["Pandemia",4]<0.05,paste(round(coeftest(fit.region[[i]])["Pandemia",4],3),"***"),round(coeftest(fit.region[[i]])["Pandemia",4],3))
+  lower_region[i]= round(confint(fit.region[[i]])["Pandemia",1],2)
+  upper_region[i]= round(confint(fit.region[[i]])["Pandemia",2],2)
+}
+# tabla con datos arima por region
+reg_table_arima = data.frame("Codigo.Region"=Cod_region,"mean"=par_region,"pvalue"=p_value_region,"sig_region"=sig_region,"lower"=lower_region,"upper"=upper_region)
+
+#table for foresplot
+table_foresplot = subset(reg_table_arima,select = c("mean","lower","upper"))
+
+
+
+#label para foresplot
+labeltext_for = cbind(rbind("Región",subset(names_region[order(names_region$Codigo.region),],Codigo.region!=17,select = Region)),
+                      as.data.frame(c("b1",round(reg_table_arima$mean,2))),
+                      as.data.frame(c("pvalue",ifelse(reg_table_arima$pvalue<0.05,paste0(round(reg_table_arima$pvalue,2),"***"),round(reg_table_arima$pvalue,2)))))
+
+#foresplot
+forestplot(mean = c(NA,reg_table_arima$mean),lower = c(NA,reg_table_arima$lower),upper = c(NA,reg_table_arima$upper),labeltext =labeltext_for,col=meta.colors("box"=colores[5],"lines"=colores[1],"zero"=colores[4])) 
+```
+
+<font size="1px"> 
+beta1 representa el coeficiente estimado de la variable dummy pandemia del modelo de regresión con errores ARIMA ajustado para cada una de las regiones .Significancia del coeficiente estimado con test de Wald usando un p-value = 0.05***. Los modelos de regresión con errores ARIMA varían para cada región dependiendo del comportamiento de la serie. Modelo ajustado con datos del año 2016 al 2021. </font>
+
+
+
+## Resultados {#Comp_medias}
+### Total País - ARIMA sin pandemia.
+
+
+```{r Predict_Sin_Pandemia}
+# auto_arima
+
+ts_chile_c = ts(df1_chile[,"Tasa_Natalidad"],start = c(2016,1),frequency = 12)
+
+
+
+ts_chile = ts(subset(df1_chile,df1_chile$Date<"2020-12-01",select = Tasa_Natalidad),start=c(2016,1) , frequency = 12)
+auto_sin_pandemia = auto.arima(ts_chile)
+forecast_chile = forecast(auto_sin_pandemia,12)
+
+#plot
+plot(ts_chile_c,col=colores[1],xlab="",ylab="")
+lines(forecast_chile$mean,col=colores[4])
+lines(forecast_chile$lower[,2],col=colores[5],lty=2,lwd=2)
+lines(forecast_chile$upper[,2],col=colores[5],lty=2,lwd=2)
+abline(v = 2020.9,col = colores[4], lty=3)
+# leyenda
+legend(2016, min(ts_prueba)*1.15, legend=c("Forecast","IC-95%"),
+       col=c(colores[4],colores[5]),lty=c(1,2) ,cex=0.8)
+#title
+title(main = paste("Forecast ARIMA sin considerar pandemia"), xlab="Fecha" ,ylab= "Tasa Natalidad" , col.main = "black" , cex.main=0.95 ,cex.lab=0.8)
+
+
+```
+
+## Resultados {#Comp_medias}
+### Regiones - ARIMA sin pandemia.
+
+
+```{r fig.width=8 , fig.height=4, warning=FALSE , message=FALSE}
+# Funcion de los gráficos arima region
+plot_arima_region =function(x,y) {
+#Generar la serie temporal de esa region completa
+ts_region_c= ts(subset(df1,Codigo.region == x,select = Tasa_Natalidad), start = c(2016,1), frequency = 12)
+#Generar la serie temporal de esa region nov20
+ts_region= ts(subset(df1,Codigo.region == x & Date<"2020-12-01",select = Tasa_Natalidad), start = c(2016,1), frequency = 12)
+#autoarima
+auto_sin_region = auto.arima(ts_region)
+#forecast
+forecast_region = forecast(auto_sin_region,12)
+#plot
+plot(ts_region_c,col=colores[1],xlab="",ylab="")
+lines(forecast_region$mean,col=colores[4])
+lines(forecast_region$lower[,2],col=colores[5],lty=2,lwd=2)
+lines(forecast_region$upper[,2],col=colores[5],lty=2,lwd=2)
+abline(v = 2020.917,col = colores[4], lty=3)
+#title
+title(main = paste0(y), xlab="Fecha" ,ylab= "Tasa Natalidad" , col.main = "black" , cex.main=0.95 ,cex.lab=0.8)
+}
+# mapply para generar graficos
+par(mfrow=c(2,3))
+arima_plots =mapply(plot_arima_region,names_region$Codigo.region[names_region$Codigo.region<7],names_region$Region[names_region$Codigo.region<7])
+
+```
+
+<font size="0.5px">
+Se ajustaron los modelos ARIMA sobre la serie temporal de la tasa de natalidad de la región desde el año 2016 a Noviembre del 2020. La línea color verde representa la serie original. La roja representa la predicción media y las líneas azules discontinuas representan el intervalo de confianza al 95%. 
+ </font>
+
+
+
+
+## Resultados {#Comp_medias}
+### Regiones - ARIMA sin pandemia 2.
+
+
+```{r fig.width=8 , fig.height=4 , warning=FALSE , message=FALSE}
+par(mfrow=c(2,3))
+arima_plots =mapply(plot_arima_region,names_region$Codigo.region[names_region$Codigo.region>=7 & names_region$Codigo.region<13],names_region$Region[names_region$Codigo.region>=7 & names_region$Codigo.region<13])
+```
+
+<font size="0.5px">
+Se ajustaron los modelos ARIMA sobre la serie temporal de la tasa de natalidad de la región desde el año 2016 a Noviembre del 2020. La línea color verde representa la serie original. La roja representa la predicción media y las líneas azules discontinuas representan el intervalo de confianza al 95%. 
+ </font>
+
+
+
+
+
+
+## Resultados {#Comp_medias}
+### Regiones - ARIMA sin pandemia 3.
+
+
+```{r fig.width=8 , fig.height=4}
+par(mfrow=c(2,3))
+arima_plots =mapply(plot_arima_region,names_region$Codigo.region[names_region$Codigo.region>=13 & names_region$Codigo.region<17],names_region$Region[names_region$Codigo.region>=13 & names_region$Codigo.region<17])
+```
+
+<font size="0.5px">
+Se ajustaron los modelos ARIMA sobre la serie temporal de la tasa de natalidad de la región desde el año 2016 a Noviembre del 2020. La línea color verde representa la serie original. La roja representa la predicción media y las líneas azules discontinuas representan el intervalo de confianza al 95%. 
+ </font>
+
+
+
+## Discusión {#font-color}
+
+* Al realizar la comparación de medias en 14 de las 16 regiones existe una diferencia significativa.
+* Al aislar el efecto de la pandemia de la tendencias y estacionalidades posibles de la serie, en 9 de las 16 regiones el impacto de la pandemia es significativo.
+
+  
+
+  
+## Discusión {#font-color}
+
+* Nivel país el impacto del Covid-19  en la natalidad es de -8.77% (IC: 3.89% y 13.74%).Esto coincide con otros estudios [@aassveEarlyAssessmentRelationship2021]
+
+* Comportamiento en las regiones es disímil.
+  + Impacto - Recuperación.
+  + Impacto - Por debajo.
+  + No hubo un impacto significativo.
+  
+
+## Bibliografia {#biblio}
